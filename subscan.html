@@ -36,7 +36,7 @@ td input[type=text]{width:100%;min-width:90px}
 .hi{color:var(--ok);border-color:var(--ok)}.mid{color:var(--warn);border-color:var(--warn)}.lo{color:var(--muted)}
 .gone{color:var(--bad);border-color:var(--bad)}
 .ev{font-size:12px;color:var(--muted);max-width:360px}
-#log{font-size:12px;color:var(--muted);white-space:pre-wrap;max-height:120px;overflow:auto}
+#log{font-size:12px;color:var(--muted);white-space:pre-wrap;max-height:260px;overflow:auto;user-select:text}
 progress{width:220px}
 details summary{cursor:pointer;color:var(--acc)}
 .hidden{display:none}
@@ -113,7 +113,7 @@ details summary{cursor:pointer;color:var(--acc)}
 <script>
 "use strict";
 /* ================= 共用狀態 ================= */
-const S = { token:null, subs:[], apps:[] };
+const S = { token:null, subs:[], apps:[], unparsed:[] };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const store = { get(k){try{return localStorage.getItem(k)}catch(e){return null}}, set(k,v){try{localStorage.setItem(k,v)}catch(e){}} };
@@ -159,7 +159,10 @@ function extractAmount(text){
   if (!text) return null;
   const found=[]; let m; AMT_RE.lastIndex=0;
   while ((m=AMT_RE.exec(text))) {
-    const cur = normCur(m[1]||m[4]); const v = parseFloat((m[2]||m[3]).replace(/,/g,""));
+    let cur = normCur(m[1]||m[4]);
+    if (cur==="$?") { const after = text.slice(m.index+m[0].length, m.index+m[0].length+6).toUpperCase();
+      cur = /USD/.test(after)? "USD" : /TWD|NTD/.test(after)? "TWD" : cur; }
+    const v = parseFloat((m[2]||m[3]).replace(/,/g,""));
     if (!isFinite(v) || v<=0 || v>200000) continue;
     const ctx = text.slice(Math.max(0,m.index-40), m.index).toLowerCase();
     found.push({v,cur,total:/total|總計|合計|總額|amount paid|已付|charged|金額/.test(ctx)});
@@ -219,14 +222,40 @@ function alertMsg(m){ $("#status").textContent = m; }
 })();
 
 /* ================= Gmail API ================= */
+// 節流：Gmail 對每位使用者每分鐘有用量上限，所有請求排隊、間隔至少 GAP 毫秒
+const sleep = ms => new Promise(res=>setTimeout(res, ms));
+let GAP = 250, nextSlot = 0, pauseUntil = 0;
+async function throttle(){
+  for(;;){
+    const now = Date.now();
+    if (now < pauseUntil) { await sleep(pauseUntil-now); continue; }
+    const t = Math.max(now, nextSlot); nextSlot = t + GAP;
+    if (t > now) await sleep(t-now);
+    if (Date.now() >= pauseUntil) return;
+  }
+}
 async function gapi(path, params){
   const url = "https://gmail.googleapis.com/gmail/v1/users/me/" + path + (params? "?"+new URLSearchParams(params):"");
-  for (let attempt=0; attempt<4; attempt++){
+  for (let attempt=0; attempt<6; attempt++){
+    await throttle();
     const r = await fetch(url, { headers:{ Authorization:"Bearer "+S.token } });
-    if (r.status===429 || r.status>=500) { await new Promise(res=>setTimeout(res, 800*(attempt+1))); continue; }
     if (r.status===401) throw new Error("權杖過期，請重新登入");
-    if (!r.ok) throw new Error("Gmail API " + r.status + "：" + (await r.text()).slice(0,200));
-    return r.json();
+    if (r.ok) return r.json();
+    const body = await r.text();
+    const quota = r.status===429 || (r.status===403 && /quota|rate ?limit|userRateLimitExceeded/i.test(body));
+    if (quota) {
+      // 撞到每分鐘上限：全體暫停 65 秒，並把間隔放慢
+      if (Date.now() >= pauseUntil) {
+        GAP = Math.min(GAP*2, 2000); pauseUntil = Date.now() + 65000;
+        log("撞到 Gmail 每分鐘用量上限，暫停 65 秒後自動繼續（之後放慢為每 "+GAP+" ms 一封）");
+        const t0 = Date.now(); const iv = setInterval(()=>{ const left = Math.ceil((pauseUntil-Date.now())/1000);
+          if (left<=0) { clearInterval(iv); return; } $("#status").textContent = "等待配額恢復… "+left+" 秒"; }, 1000);
+      }
+      continue;
+    }
+    if (r.status>=500) { await sleep(1000*(attempt+1)); continue; }
+    if (r.status===403 && /has not been used|disabled/i.test(body)) throw new Error("專案尚未啟用 Gmail API（或剛啟用還沒生效，等 2 分鐘再試）");
+    throw new Error("Gmail API " + r.status + "：" + body.slice(0,200));
   }
   throw new Error("Gmail API 一直忙線，請稍後再試");
 }
@@ -279,7 +308,7 @@ async function fetchMany(ids, label, full){
       prog.value = ++done; $("#status").textContent = label+" "+done+"/"+ids.length;
     }
   }
-  await Promise.all(Array.from({length:6}, worker));
+  await Promise.all(Array.from({length:3}, worker));
   return out;
 }
 
@@ -405,7 +434,7 @@ function buildSubs(msgs){
 $("#btnScan").onclick = async () => {
   const months = +$("#months").value, cap = +$("#cap").value || 400;
   const since = "newer_than:" + months + "m";
-  $("#btnScan").disabled = true; $("#log").textContent = "";
+  $("#btnScan").disabled = true; $("#log").textContent = ""; S.unparsed = []; GAP = 250; pauseUntil = 0;
   try {
     // 連結 App
     const qApps = `from:(no-reply@accounts.google.com) ${since} (subject:("Security alert") OR subject:(安全性快訊) OR subject:(安全性警示) OR subject:(signed in) OR subject:(登入) OR "granted access" OR 存取權)`;
@@ -416,7 +445,7 @@ $("#btnScan").onclick = async () => {
     for (const m of appMsgs){
       const subj = hdr(m,"Subject"); const txt = bodyText(m.payload);
       const name = parseAppMail(subj, txt);
-      if (!name) { if (/third-party|第三方|access|存取/i.test(subj+txt.slice(0,600))) unknown++; continue; }
+      if (!name) { if (/third-party|第三方|access|存取|登入|sign/i.test(subj+txt.slice(0,600))) { unknown++; S.unparsed.push(subj+" ｜ "+(m.snippet||"").slice(0,120)); } continue; }
       const d = new Date(+m.internalDate);
       const k = name.toLowerCase();
       const prev = appMap.get(k);
@@ -424,7 +453,8 @@ $("#btnScan").onclick = async () => {
     }
     mergeApps([...appMap.values()].map(a=>({ keep:true, name:a.name, kind:"曾授權／登入", firstSeen:a.date.toISOString().slice(0,10),
       source:"Gmail", evidence:"「"+a.subject.slice(0,70)+"」" })));
-    if (unknown) log("另有 "+unknown+" 封看起來像授權通知但抓不到 App 名稱（Google 改了信件格式時會發生）。");
+    if (unknown) { log("另有 "+unknown+" 封看起來像授權通知但抓不到 App 名稱。主旨如下（可複製給 Claude 調整規則）：");
+      [...new Set(S.unparsed)].slice(0,30).forEach(s=>log("  · "+s)); }
 
     // 訂閱
     const kw = '(subject:(receipt OR 收據 OR invoice OR 發票 OR subscription OR 訂閱 OR 續訂 OR renewal OR renew OR 付款 OR payment OR 扣款 OR 帳單 OR membership OR 會員) OR from:(googleplay-noreply@google.com))';
