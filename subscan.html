@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SubScan 訂閱掃描</title>
+<script src="https://accounts.google.com/gsi/client" async></script>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1d2330;--muted:#6b7280;--line:#e3e6eb;--acc:#2f6fdb;--ok:#1f8a4c;--warn:#b7791f;--bad:#c0392b}
+@media (prefers-color-scheme:dark){:root{--bg:#14171c;--card:#1d2128;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c323b;--acc:#5b8ff0;--ok:#4cc27e;--warn:#e0a84a;--bad:#e06b5f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,"Microsoft JhengHei","PingFang TC",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:4px 0 2px}h2{font-size:17px;margin:0 0 10px}
+.sub{color:var(--muted);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:12px 0}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+input,select,textarea,button{font:inherit;color:inherit}
+input[type=text],input[type=number],select,textarea{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+textarea{width:100%;min-height:140px;font-size:13px}
+button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer}
+button.ghost{background:transparent;color:var(--acc);border:1px solid var(--acc)}
+button:disabled{opacity:.5;cursor:default}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
+.stat b{display:block;font-size:26px}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-top:8px}
+.tabs button{background:none;color:var(--muted);border-radius:6px 6px 0 0;border:1px solid transparent;border-bottom:0}
+.tabs button.on{color:var(--fg);border-color:var(--line);background:var(--card)}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{border-bottom:1px solid var(--line);padding:6px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600;white-space:nowrap}
+td input[type=text]{width:100%;min-width:90px}
+.tag{display:inline-block;font-size:12px;padding:1px 6px;border-radius:9px;border:1px solid var(--line);white-space:nowrap}
+.hi{color:var(--ok);border-color:var(--ok)}.mid{color:var(--warn);border-color:var(--warn)}.lo{color:var(--muted)}
+.gone{color:var(--bad);border-color:var(--bad)}
+.ev{font-size:12px;color:var(--muted);max-width:360px}
+#log{font-size:12px;color:var(--muted);white-space:pre-wrap;max-height:120px;overflow:auto}
+progress{width:220px}
+details summary{cursor:pointer;color:var(--acc)}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<main>
+<h1>SubScan 訂閱與連結 App 掃描</h1>
+<div class="sub">A：用 Gmail（唯讀）掃收據、續訂信與 Google 安全通知　B：貼上 Google 帳戶頁面文字直接解析。<br>
+所有處理都在這個瀏覽器裡完成；存取權杖只放在記憶體，關掉分頁就失效，不會傳到任何第三方。</div>
+
+<div class="stats" style="margin-top:12px">
+  <div class="stat"><span class="sub">連結的第三方 App</span><b id="sApps">–</b><span class="sub" id="sAppsNote"></span></div>
+  <div class="stat"><span class="sub">偵測到的訂閱（已勾選）</span><b id="sSubs">–</b><span class="sub" id="sSubsNote"></span></div>
+  <div class="stat"><span class="sub">估計每月總額</span><b id="sMonthly">–</b><span class="sub">依偵測金額與週期換算，跨幣別分開算</span></div>
+</div>
+
+<div class="tabs">
+  <button class="on" data-tab="tA">A．Gmail 自動掃描</button>
+  <button data-tab="tB">B．貼上解析</button>
+  <button data-tab="tR">結果與匯出</button>
+</div>
+
+<section id="tA" class="card">
+  <h2>A．Gmail 自動掃描</h2>
+  <div class="row">
+    <label>OAuth Client ID <input type="text" id="clientId" size="48" placeholder="xxxx.apps.googleusercontent.com"></label>
+    <label>回溯 <select id="months"><option>6</option><option selected>13</option><option>24</option><option>36</option></select> 個月</label>
+    <label>每類最多 <input type="number" id="cap" value="400" min="50" max="2000" step="50" style="width:80px"> 封</label>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button id="btnLogin">登入 Google（gmail.readonly）</button>
+    <button id="btnScan" disabled>開始掃描</button>
+    <progress id="prog" value="0" max="1" class="hidden"></progress>
+    <span id="status" class="sub"></span>
+  </div>
+  <details style="margin-top:10px"><summary>第一次用：OAuth 設定</summary>
+  <ol class="sub">
+    <li>預設 Client ID 是「Google 待辦 Claude 版」那組，已授權來源 <code>https://stevensky8316-hue.github.io</code>。把本檔放在同一個 GitHub Pages 網域下就能直接用。</li>
+    <li>同一個 Cloud 專案要<b>啟用 Gmail API</b>（API 和服務 → 程式庫 → Gmail API → 啟用）。</li>
+    <li>OAuth 同意畫面（測試中）：自己的 Gmail 要在測試使用者名單裡；可順手把 <code>.../auth/gmail.readonly</code> 加進範圍。</li>
+    <li>放在其他網址的話：在 OAuth 用戶端的「已授權的 JavaScript 來源」加上 <code id="originHint"></code>（備案重新導向 URI：<code id="redirHint"></code>）。</li>
+    <li>不能直接雙擊用 file:// 開。</li>
+  </ol></details>
+  <div id="log"></div>
+</section>
+
+<section id="tB" class="card hidden">
+  <h2>B．貼上解析</h2>
+  <p class="sub">1. 開啟 <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener">myaccount.google.com/connections</a>（「你與第三方應用程式和服務的連結」），按 Ctrl+A、Ctrl+C，貼到下面第一格。<br>
+  2. 開啟 <a href="https://play.google.com/store/account/subscriptions" target="_blank" rel="noopener">Google Play 訂閱</a>，同樣全選複製後貼到第二格。</p>
+  <label class="sub">連結的 App 頁面文字</label>
+  <textarea id="pasteApps" placeholder="貼上 connections 頁面文字…"></textarea>
+  <label class="sub">Google Play 訂閱頁面文字</label>
+  <textarea id="pastePlay" placeholder="貼上 Play 訂閱頁面文字…"></textarea>
+  <div class="row" style="margin-top:8px"><button id="btnParse">解析</button><span id="parseStatus" class="sub"></span></div>
+</section>
+
+<section id="tR" class="card hidden">
+  <h2>結果</h2>
+  <p class="sub">打勾＝確認保留。名稱、金額、週期都可以直接改；改完再匯出。</p>
+  <h3 style="font-size:15px">訂閱</h3>
+  <div class="tablewrap"><table id="tblSubs"><thead><tr><th>✓</th><th>服務</th><th>金額</th><th>幣別</th><th>週期</th><th>最近扣款</th><th>狀態</th><th>信心</th><th>來源／依據</th></tr></thead><tbody></tbody></table></div>
+  <h3 style="font-size:15px;margin-top:16px">連結的第三方 App</h3>
+  <div class="tablewrap"><table id="tblApps"><thead><tr><th>✓</th><th>App</th><th>類型</th><th>首次出現</th><th>來源／依據</th></tr></thead><tbody></tbody></table></div>
+  <div class="row" style="margin-top:12px">
+    <button id="btnJson">匯出 JSON（給 SubCard）</button>
+    <button class="ghost" id="btnCsv">匯出 CSV</button>
+    <button class="ghost" id="btnClear">清空結果</button>
+  </div>
+</section>
+</main>
+
+<script>
+"use strict";
+/* ================= 共用狀態 ================= */
+const S = { token:null, subs:[], apps:[] };
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const store = { get(k){try{return localStorage.getItem(k)}catch(e){return null}}, set(k,v){try{localStorage.setItem(k,v)}catch(e){}} };
+const log = m => { const el=$("#log"); el.textContent += m+"\n"; el.scrollTop=el.scrollHeight; };
+
+/* ================= 已知服務字典 ================= */
+// domain 片段 → [顯示名稱, 是否幾乎必為訂閱]
+const KNOWN = [
+  ["netflix.com","Netflix",1],["spotify.com","Spotify",1],["disneyplus.com","Disney+",1],["kkbox.com","KKBOX",1],
+  ["openai.com","ChatGPT / OpenAI",1],["anthropic.com","Claude / Anthropic",1],["perplexity.ai","Perplexity",1],
+  ["cursor.com","Cursor",1],["cursor.sh","Cursor",1],["github.com","GitHub",0],["notion.so","Notion",1],
+  ["adobe.com","Adobe",1],["microsoft.com","Microsoft",0],["canva.com","Canva",1],["dropbox.com","Dropbox",1],
+  ["midjourney.com","Midjourney",1],["openrouter.ai","OpenRouter",0],["x.ai","xAI / Grok",1],
+  ["nintendo","Nintendo",0],["playstation","PlayStation",0],["hbomax","Max",1],["primevideo","Prime Video",1],
+  ["amazon.","Amazon",0],["linetv","LINE TV",1],["friday","friDay影音",1],["catchplay","CATCHPLAY+",1],
+  ["evernote","Evernote",1],["1password","1Password",1],["bitwarden","Bitwarden",1],["nordvpn","NordVPN",1],
+  ["expressvpn","ExpressVPN",1],["grammarly","Grammarly",1],["duolingo","Duolingo",1],["medium.com","Medium",1],
+  ["patreon","Patreon",1],["zoom.us","Zoom",1],["slack.com","Slack",0],["figma.com","Figma",1],
+  ["readwise","Readwise",1],["uptodate","UpToDate",1],["wolterskluwer","Wolters Kluwer / UpToDate",0],["elsevier","Elsevier",0],
+];
+const SUB_WORDS = /訂閱|續訂|自動續|月費|年費|會員|方案|subscription|subscribed|renew|renewal|membership|your plan|billing period|recurring|next billing|下次扣款|下次付款|帳單週期/i;
+const RECEIPT_WORDS = /收據|發票|付款|扣款|帳單|訂單|receipt|invoice|payment|charged|order|billing/i;
+
+function knownFor(fromAddr){
+  const a = (fromAddr||"").toLowerCase();
+  for (const [k,name,always] of KNOWN) if (a.includes(k)) return {name, always:!!always};
+  return null;
+}
+
+/* ================= 金額與日期 ================= */
+const AMT_RE = /(NT\$|NTD|TWD|US\$|USD|HK\$|JPY|¥|EUR|€|GBP|£|\$)\s?([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)|([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?)\s?(元|TWD|NTD|USD)/g;
+function normCur(c){
+  c=(c||"").toUpperCase();
+  if (/NT|TWD|NTD|元/.test(c)) return "TWD";
+  if (/US|USD/.test(c)) return "USD";
+  if (c==="$") return "$?";
+  if (/HK/.test(c)) return "HKD"; if (/JPY|¥/.test(c)) return "JPY";
+  if (/EUR|€/.test(c)) return "EUR"; if (/GBP|£/.test(c)) return "GBP";
+  return c;
+}
+// 取信件裡最像「總額」的金額：優先抓靠近 total/總計/合計 的，否則取最大值
+function extractAmount(text){
+  if (!text) return null;
+  const found=[]; let m; AMT_RE.lastIndex=0;
+  while ((m=AMT_RE.exec(text))) {
+    const cur = normCur(m[1]||m[4]); const v = parseFloat((m[2]||m[3]).replace(/,/g,""));
+    if (!isFinite(v) || v<=0 || v>200000) continue;
+    const ctx = text.slice(Math.max(0,m.index-40), m.index).toLowerCase();
+    found.push({v,cur,total:/total|總計|合計|總額|amount paid|已付|charged|金額/.test(ctx)});
+  }
+  if (!found.length) return null;
+  const t = found.filter(f=>f.total);
+  const pool = t.length? t : found;
+  return pool.reduce((a,b)=> b.v>a.v? b:a);
+}
+
+/* ================= OAuth（隱式流程，無外部函式庫） ================= */
+const REDIRECT = location.origin + location.pathname;
+$("#originHint").textContent = location.origin;
+$("#redirHint").textContent = REDIRECT;
+// 預設帶入「Google 待辦 Claude 版」用的同一組 Client ID（同一個 GitHub Pages 來源已授權）
+const DEFAULT_CID = "117805456426-npdmk1rqg70lgs5sf151e6s50h4ptadi.apps.googleusercontent.com";
+$("#clientId").value = store.get("subscan.clientId") || DEFAULT_CID;
+
+$("#btnLogin").onclick = () => {
+  const cid = $("#clientId").value.trim();
+  if (!cid) { alertMsg("請先填 OAuth Client ID"); return; }
+  if (location.protocol === "file:") { alertMsg("這個頁面要用 http(s) 開啟才能登入，請看下方「第一次用」說明。"); return; }
+  store.set("subscan.clientId", cid);
+  // 優先用 Google Identity Services 彈出視窗：只需要「已授權的 JavaScript 來源」，不必另設重新導向 URI
+  if (window.google && google.accounts && google.accounts.oauth2) {
+    const tc = google.accounts.oauth2.initTokenClient({ client_id:cid,
+      scope:"https://www.googleapis.com/auth/gmail.readonly",
+      callback: r => {
+        if (r.error) { alertMsg("登入失敗：" + r.error); return; }
+        S.token = r.access_token; $("#btnScan").disabled = false;
+        alertMsg("已登入（權杖約 1 小時內有效）。可以開始掃描。");
+      },
+      error_callback: e => alertMsg("登入視窗被關閉或擋下：" + (e.type||"")) });
+    tc.requestAccessToken({ prompt:"select_account" });
+    return;
+  }
+  // 備案：GIS 載入失敗時改用整頁重新導向（需要另外登記重新導向 URI）
+  const st = Math.random().toString(36).slice(2);
+  try{ sessionStorage.setItem("subscan.state", st) }catch(e){}
+  const p = new URLSearchParams({ client_id:cid, redirect_uri:REDIRECT, response_type:"token",
+    scope:"https://www.googleapis.com/auth/gmail.readonly", include_granted_scopes:"true", state:st, prompt:"select_account" });
+  location.href = "https://accounts.google.com/o/oauth2/v2/auth?" + p;
+};
+function alertMsg(m){ $("#status").textContent = m; }
+(function readToken(){
+  if (!location.hash.includes("access_token")) {
+    if (location.hash.includes("error")) alertMsg("登入失敗：" + new URLSearchParams(location.hash.slice(1)).get("error"));
+    return;
+  }
+  const h = new URLSearchParams(location.hash.slice(1));
+  let ok = true; try{ ok = h.get("state") === sessionStorage.getItem("subscan.state") }catch(e){}
+  history.replaceState(null,"",REDIRECT);
+  if (!ok) { alertMsg("state 不符，已忽略這次登入，請重新登入。"); return; }
+  S.token = h.get("access_token");
+  $("#btnScan").disabled = false;
+  alertMsg("已登入（權杖約 1 小時內有效）。可以開始掃描。");
+})();
+
+/* ================= Gmail API ================= */
+async function gapi(path, params){
+  const url = "https://gmail.googleapis.com/gmail/v1/users/me/" + path + (params? "?"+new URLSearchParams(params):"");
+  for (let attempt=0; attempt<4; attempt++){
+    const r = await fetch(url, { headers:{ Authorization:"Bearer "+S.token } });
+    if (r.status===429 || r.status>=500) { await new Promise(res=>setTimeout(res, 800*(attempt+1))); continue; }
+    if (r.status===401) throw new Error("權杖過期，請重新登入");
+    if (!r.ok) throw new Error("Gmail API " + r.status + "：" + (await r.text()).slice(0,200));
+    return r.json();
+  }
+  throw new Error("Gmail API 一直忙線，請稍後再試");
+}
+async function listIds(q, cap){
+  const ids=[]; let pageToken;
+  do {
+    const p = { q, maxResults: 500 }; if (pageToken) p.pageToken = pageToken;
+    const r = await gapi("messages", p);
+    (r.messages||[]).forEach(m=>ids.push(m.id));
+    pageToken = r.nextPageToken;
+  } while (pageToken && ids.length < cap);
+  return ids.slice(0, cap);
+}
+function b64(s){
+  s = s.replace(/-/g,"+").replace(/_/g,"/");
+  const bin = atob(s); const bytes = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  return new TextDecoder("utf-8").decode(bytes);
+}
+function htmlToText(h){
+  return h.replace(/<style[\s\S]*?<\/style>/gi," ").replace(/<script[\s\S]*?<\/script>/gi," ")
+    .replace(/<br\s*\/?>|<\/(p|div|tr|li|h\d)>/gi,"\n").replace(/<[^>]+>/g," ")
+    .replace(/&nbsp;/g," ").replace(/&amp;/g,"&").replace(/&#36;/g,"$").replace(/&lt;/g,"<").replace(/&gt;/g,">")
+    .replace(/[ \t]+/g," ").replace(/\n\s*\n+/g,"\n");
+}
+function bodyText(payload){
+  let plain="", html="";
+  (function walk(p){
+    if (!p) return;
+    if (p.body && p.body.data) {
+      if (p.mimeType==="text/plain" && !plain) plain = b64(p.body.data);
+      else if (p.mimeType==="text/html" && !html) html = b64(p.body.data);
+    }
+    (p.parts||[]).forEach(walk);
+  })(payload);
+  return (plain || htmlToText(html)).slice(0, 20000);
+}
+function hdr(msg, name){ const h=(msg.payload.headers||[]).find(x=>x.name.toLowerCase()===name.toLowerCase()); return h? h.value:""; }
+async function fetchMany(ids, label, full){
+  const out=[]; let done=0; const prog=$("#prog");
+  prog.classList.remove("hidden"); prog.max = ids.length||1; prog.value=0;
+  const queue = ids.slice();
+  async function worker(){
+    while (queue.length){
+      const id = queue.shift();
+      try {
+        const m = await gapi("messages/"+id, full? {format:"full"} : {format:"metadata", metadataHeaders:"From"});
+        out.push(m);
+      } catch(e){ if (/過期/.test(e.message)) throw e; log("略過 "+id+"："+e.message); }
+      prog.value = ++done; $("#status").textContent = label+" "+done+"/"+ids.length;
+    }
+  }
+  await Promise.all(Array.from({length:6}, worker));
+  return out;
+}
+
+/* ================= A-1：連結 App（Google 安全通知信） ================= */
+// Google 的通知信用語會改版，以下抓幾種常見句型；抓不到的會保留主旨讓你自己判斷
+const APP_PATTERNS = [
+  /(?:^|\s)(.+?)\s+(?:was granted access to|now has access to)\s+your Google Account/i,
+  /You signed in to\s+(.+?)\s+with (?:your )?Google/i,
+  /You(?:'ve| have) (?:used|connected) (?:your )?Google Account (?:to sign in to|with)\s+(.+?)(?:[.\n]|$)/i,
+  /已(?:將|授予)\s*(.+?)\s*(?:存取|對你的 Google 帳戶)/,
+  /(.+?)\s*已(?:取得|獲得|獲准)(?:你|您)的\s*Google\s*帳戶(?:的)?存取權/,
+  /(?:你|您)已使用\s*Google\s*帳戶登入\s*(.+?)(?:[。\n]|$)/,
+  /(?:你|您)已透過\s*Google\s*(?:帳戶)?登入\s*(.+?)(?:[。\n]|$)/,
+];
+function parseAppMail(subject, text){
+  const src = subject + "\n" + (text||"");
+  for (const re of APP_PATTERNS){
+    const m = src.match(re);
+    if (m && m[1]) {
+      const name = m[1].replace(/^["「『]|["」』]$/g,"").replace(/\s+/g," ").trim();
+      if (name.length>=2 && name.length<=60 && !/google 帳戶|google account/i.test(name)) return name;
+    }
+  }
+  return null;
+}
+
+/* ================= A-2：訂閱收據 ================= */
+function nameFromFrom(from){
+  const m = from.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>/);
+  const disp = m? m[1].trim() : ""; const addr = (m? m[2] : from).toLowerCase();
+  const dom = (addr.split("@")[1]||"").replace(/^(mail|email|e|info|noreply|no-reply|billing|receipts?|payments?|news)\./,"");
+  return { disp, addr, dom };
+}
+function storeItem(source, text, subject){
+  // Google Play / Apple 收據：試著抓品項名稱
+  const t = subject + "\n" + text;
+  let m;
+  if (source==="Google Play"){
+    m = t.match(/(?:訂閱|Subscription)[^\n]{0,8}\n?\s*([^\n]{2,60}?)\s*(?:\(|（|\n)/) || t.match(/項目[:：]?\s*([^\n]{2,60})/);
+  } else if (source==="Apple"){
+    m = t.match(/\n\s*([^\n]{2,50})\n[^\n]*(?:月繳|年繳|Monthly|Yearly|\(1 個月\)|\(1 年\)|Renews)/i);
+  }
+  return m? m[1].trim() : null;
+}
+function serviceKey(msg, text){
+  const from = hdr(msg,"From"), subject = hdr(msg,"Subject");
+  const f = nameFromFrom(from);
+  if (/googleplay|play\.google|google play/i.test(from+subject)) {
+    const it = storeItem("Google Play", text, subject);
+    return { key:"gp:"+(it||"?").toLowerCase(), name: it? it+"（Google Play）" : "Google Play（未辨識品項）", always:true, store:"Google Play" };
+  }
+  if (/apple\.com/i.test(f.addr) && /receipt|收據|subscription|訂閱/i.test(subject)) {
+    const it = storeItem("Apple", text, subject);
+    return { key:"ap:"+(it||"?").toLowerCase(), name: it? it+"（Apple）" : "Apple（未辨識品項）", always:true, store:"Apple" };
+  }
+  if (/google\.com$/.test(f.addr) && /google one|youtube premium|youtube music|workspace/i.test(subject+text.slice(0,500))) {
+    const n = (subject+text).match(/Google One|YouTube Premium|YouTube Music|Google Workspace/i)[0];
+    return { key:"g:"+n.toLowerCase(), name:n, always:true };
+  }
+  const k = knownFor(f.addr);
+  if (k) return { key:"k:"+k.name, name:k.name, always:k.always };
+  return { key:"d:"+f.dom, name: f.disp || f.dom, always:false };
+}
+function cycleFromGaps(dates){
+  if (dates.length<2) return null;
+  const gaps=[]; for (let i=1;i<dates.length;i++) gaps.push((dates[i]-dates[i-1])/864e5);
+  gaps.sort((a,b)=>a-b); const g = gaps[Math.floor(gaps.length/2)];
+  if (g>=5 && g<=9) return "每週";
+  if (g>=25 && g<=36) return "每月";
+  if (g>=80 && g<=100) return "每季";
+  if (g>=170 && g<=195) return "每半年";
+  if (g>=340 && g<=390) return "每年";
+  return null;
+}
+const CYCLE_MONTHS = { "每週":12/52, "每月":1, "每季":3, "每半年":6, "每年":12 };
+function cycleFromText(text){
+  if (/每年|年繳|年費|annual|yearly|per year|\/ ?yr|\/ ?year|1 年/i.test(text)) return "每年";
+  if (/每月|月繳|月費|monthly|per month|\/ ?mo|1 個月/i.test(text)) return "每月";
+  return null;
+}
+function buildSubs(msgs){
+  const groups = new Map();
+  for (const {msg, text} of msgs){
+    const subject = hdr(msg,"Subject");
+    const sk = serviceKey(msg, text);
+    const isSubWord = SUB_WORDS.test(subject+"\n"+text.slice(0,3000));
+    const amt = extractAmount(subject+"\n"+text);
+    const g = groups.get(sk.key) || { name:sk.name, always:sk.always, store:sk.store||"", hits:[], subWord:0, cycTxt:{} };
+    g.hits.push({ date:new Date(+msg.internalDate), amt, subject });
+    if (isSubWord) g.subWord++;
+    const ct = cycleFromText(subject+"\n"+text.slice(0,4000)); if (ct) g.cycTxt[ct]=(g.cycTxt[ct]||0)+1;
+    groups.set(sk.key, g);
+  }
+  const now = Date.now(), out=[];
+  for (const g of groups.values()){
+    g.hits.sort((a,b)=>a.date-b.date);
+    const dates = g.hits.map(h=>h.date);
+    const cyc = cycleFromGaps(dates) || Object.entries(g.cycTxt).sort((a,b)=>b[1]-a[1]).map(x=>x[0])[0] || "";
+    const last = g.hits[g.hits.length-1];
+    const lastAmt = [...g.hits].reverse().find(h=>h.amt);
+    // 信心分數
+    let score = 0;
+    if (g.always) score += 2;
+    if (g.subWord) score += 2;
+    if (cycleFromGaps(dates)) score += 2;
+    if (g.hits.length>=2) score += 1;
+    if (!lastAmt) score -= 1;
+    if (score < 2) continue;                     // 太弱的直接不列，避免一次性購物洗版
+    const conf = score>=5? "高" : score>=3? "中" : "低";
+    let status = "使用中";
+    if (cyc && CYCLE_MONTHS[cyc]) {
+      const overdue = (now - last.date) / 864e5 > CYCLE_MONTHS[cyc]*30.4*1.5 + 7;
+      if (overdue) status = "可能已取消";
+    } else if ((now-last.date)/864e5 > 400) status = "可能已取消";
+    out.push({ keep: conf!=="低" && status==="使用中", name:g.name, amount:lastAmt? lastAmt.amt.v : "", currency:lastAmt? lastAmt.amt.cur : "",
+      cycle:cyc, lastCharge:last.date.toISOString().slice(0,10), status, confidence:conf, source:"Gmail",
+      evidence: g.hits.length+" 封；最近：「"+last.subject.slice(0,80)+"」" });
+  }
+  return out.sort((a,b)=> (b.keep-a.keep) || a.name.localeCompare(b.name,"zh-Hant"));
+}
+
+/* ================= 掃描主流程 ================= */
+$("#btnScan").onclick = async () => {
+  const months = +$("#months").value, cap = +$("#cap").value || 400;
+  const since = "newer_than:" + months + "m";
+  $("#btnScan").disabled = true; $("#log").textContent = "";
+  try {
+    // 連結 App
+    const qApps = `from:(no-reply@accounts.google.com) ${since} (subject:("Security alert") OR subject:(安全性快訊) OR subject:(安全性警示) OR subject:(signed in) OR subject:(登入) OR "granted access" OR 存取權)`;
+    log("查詢連結 App 通知信…");
+    const appIds = await listIds(qApps, cap); log("找到 "+appIds.length+" 封 Google 安全通知");
+    const appMsgs = await fetchMany(appIds, "讀取安全通知", true);
+    const appMap = new Map(); let unknown = 0;
+    for (const m of appMsgs){
+      const subj = hdr(m,"Subject"); const txt = bodyText(m.payload);
+      const name = parseAppMail(subj, txt);
+      if (!name) { if (/third-party|第三方|access|存取/i.test(subj+txt.slice(0,600))) unknown++; continue; }
+      const d = new Date(+m.internalDate);
+      const k = name.toLowerCase();
+      const prev = appMap.get(k);
+      if (!prev || d < prev.date) appMap.set(k, { name, date:d, subject:subj });
+    }
+    mergeApps([...appMap.values()].map(a=>({ keep:true, name:a.name, kind:"曾授權／登入", firstSeen:a.date.toISOString().slice(0,10),
+      source:"Gmail", evidence:"「"+a.subject.slice(0,70)+"」" })));
+    if (unknown) log("另有 "+unknown+" 封看起來像授權通知但抓不到 App 名稱（Google 改了信件格式時會發生）。");
+
+    // 訂閱
+    const kw = '(subject:(receipt OR 收據 OR invoice OR 發票 OR subscription OR 訂閱 OR 續訂 OR renewal OR renew OR 付款 OR payment OR 扣款 OR 帳單 OR membership OR 會員) OR from:(googleplay-noreply@google.com))';
+    const qSubs = `${kw} ${since} -in:spam -in:trash -category:promotions`;
+    log("查詢收據／訂閱信…");
+    const subIds = await listIds(qSubs, cap); log("找到 "+subIds.length+" 封候選信件");
+    const subMsgs = await fetchMany(subIds, "讀取收據", true);
+    const prepared = subMsgs.map(msg=>({ msg, text: bodyText(msg.payload) }))
+      .filter(x=> RECEIPT_WORDS.test(hdr(x.msg,"Subject")+x.text.slice(0,1500)) || SUB_WORDS.test(hdr(x.msg,"Subject")));
+    mergeSubs(buildSubs(prepared));
+    log("完成。請到「結果與匯出」確認。");
+    $("#status").textContent = "掃描完成";
+    switchTab("tR");
+  } catch(e){ log("錯誤："+e.message); $("#status").textContent = e.message; }
+  finally { $("#btnScan").disabled = !S.token; $("#prog").classList.add("hidden"); }
+};
+
+/* ================= B：貼上解析 ================= */
+// connections 頁面的介面字串（中英）——遇到就當雜訊丟掉
+const UI_NOISE = /^(google 帳戶|google account|首頁|home|個人資訊|personal info|資料和隱私權|data (&|and) privacy|安全性|security|使用者和分享|people (&|and) sharing|付款和訂閱|payments (&|and) subscriptions|關於|about|說明|help|搜尋|search|隱私權|privacy|條款|terms|你與第三方應用程式和服務的連結|your connections to third-party apps (&|and) services|.*第三方應用程式.*|.*third-party apps.*|篩選|filter|全部|all|查看詳細資料|see details|管理|manage|顯示全部|see all|.*連結.*詳細.*|進一步瞭解|learn more|google 服務|google services|.*帳戶.*連結.*|sign in with google|使用 google 帳戶登入|已連結的帳戶|linked accounts|主選單|main menu|意見回饋|send feedback|.*@gmail\.com|.*@.*\..*|[\d\s:]+|.)$/i;
+// 狀態描述行：它的前一行通常就是 App 名稱
+const APP_STATUS = /(可存取|有權存取|部分存取|存取權|access to|has (some|full) access|signed in with google|使用 google 帳戶登入|已透過 google 登入|已連結|linked|connected|自 .*起|since |可以查看|can (see|view|access))/i;
+function parseConnections(txt){
+  const lines = txt.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const names = new Map();
+  for (let i=0;i<lines.length;i++){
+    const L = lines[i];
+    if (APP_STATUS.test(L) && i>0) {
+      const cand = lines[i-1];
+      if (!UI_NOISE.test(cand) && !APP_STATUS.test(cand) && cand.length<=60) names.set(cand.toLowerCase(), { name:cand, kind: /sign in|登入/i.test(L)? "以 Google 登入" : "可存取帳戶資料", evidence:L.slice(0,80) });
+    }
+  }
+  // 頁面格式沒對上時的備案：把看起來像名稱、又不是雜訊的短行全部列出，讓使用者取消勾選
+  if (!names.size) {
+    for (const L of lines) if (!UI_NOISE.test(L) && L.length>=2 && L.length<=40 && !/[。.!?？]$/.test(L))
+      names.set(L.toLowerCase(), { name:L, kind:"待確認", evidence:"未辨識頁面格式，逐行列出" });
+  }
+  return [...names.values()];
+}
+const PRICE_LINE = /((?:NT\$|US\$|\$|TWD|USD)\s?[0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*(?:\/|每)?\s*(月|年|週|month|year|week|mo|yr)?/i;
+function parsePlay(txt){
+  const lines = txt.split(/\r?\n/).map(s=>s.trim()).filter(Boolean); const out=[];
+  for (let i=0;i<lines.length;i++){
+    const m = lines[i].match(PRICE_LINE); if (!m) continue;
+    // 往上找最近一個不是價格、不是狀態的行當名稱
+    let name=null; for (let j=i-1;j>=Math.max(0,i-3);j--){ const c=lines[j];
+      if (!PRICE_LINE.test(c) && !/^(使用中|已取消|active|cancel+ed|管理|manage|續訂|renews|將於|expires|到期)/i.test(c) && c.length<=60) { name=c; break; } }
+    if (!name) continue;
+    const a = extractAmount(m[1]);
+    const unit = (m[2]||"").toLowerCase();
+    const near = lines.slice(i, i+3).join(" ");
+    out.push({ keep:!/已取消|cancel+ed|expires|到期/i.test(near), name:name+"（Google Play）", amount:a? a.v:"", currency:a? a.cur:"",
+      cycle: /年|year|yr/.test(unit)? "每年" : /週|week/.test(unit)? "每週" : "每月",
+      lastCharge:"", status: /已取消|cancel+ed/i.test(near)? "已取消" : "使用中", confidence:"高", source:"Play 頁面", evidence:lines[i].slice(0,80) });
+  }
+  return out;
+}
+$("#btnParse").onclick = () => {
+  const apps = parseConnections($("#pasteApps").value).map(a=>({ keep:true, name:a.name, kind:a.kind, firstSeen:"", source:"Google 帳戶頁面", evidence:a.evidence }));
+  const subs = parsePlay($("#pastePlay").value);
+  mergeApps(apps); mergeSubs(subs);
+  $("#parseStatus").textContent = `解析出 ${apps.length} 個 App、${subs.length} 個 Play 訂閱`;
+  if (apps.length || subs.length) switchTab("tR");
+};
+
+/* ================= 合併、顯示、匯出 ================= */
+const normName = s => s.toLowerCase().replace(/（.*?）|\(.*?\)/g,"").replace(/[^\p{L}\p{N}]/gu,"");
+function mergeApps(list){
+  for (const a of list){
+    const ex = S.apps.find(x=>normName(x.name)===normName(a.name));
+    if (ex) { if (!ex.source.includes(a.source)) ex.source += "＋"+a.source; if (a.source==="Google 帳戶頁面") ex.kind = a.kind+"（目前仍連結）"; if (!ex.firstSeen) ex.firstSeen=a.firstSeen; }
+    else S.apps.push({...a});
+  }
+  render();
+}
+function mergeSubs(list){
+  for (const s of list){
+    const ex = S.subs.find(x=>normName(x.name)===normName(s.name));
+    if (ex) { if (!ex.source.includes(s.source)) ex.source += "＋"+s.source; for (const k of ["amount","currency","cycle","lastCharge"]) if (!ex[k] && s[k]) ex[k]=s[k]; if (s.source==="Play 頁面") ex.status=s.status; }
+    else S.subs.push({...s});
+  }
+  render();
+}
+function render(){
+  const tb = $("#tblSubs tbody");
+  tb.innerHTML = S.subs.map((s,i)=>`<tr>
+    <td><input type="checkbox" data-s="${i}" data-k="keep" ${s.keep?"checked":""}></td>
+    <td><input type="text" data-s="${i}" data-k="name" value="${esc(s.name)}"></td>
+    <td><input type="number" data-s="${i}" data-k="amount" value="${esc(s.amount)}" style="width:90px"></td>
+    <td><input type="text" data-s="${i}" data-k="currency" value="${esc(s.currency)}" style="width:60px;min-width:0"></td>
+    <td><select data-s="${i}" data-k="cycle">${["","每週","每月","每季","每半年","每年"].map(c=>`<option ${c===s.cycle?"selected":""}>${c}</option>`).join("")}</select></td>
+    <td>${esc(s.lastCharge)}</td>
+    <td><span class="tag ${s.status==="使用中"?"hi":"gone"}">${esc(s.status)}</span></td>
+    <td><span class="tag ${s.confidence==="高"?"hi":s.confidence==="中"?"mid":"lo"}">${esc(s.confidence)}</span></td>
+    <td class="ev">${esc(s.source)}<br>${esc(s.evidence)}</td></tr>`).join("") || `<tr><td colspan="9" class="sub">尚無資料</td></tr>`;
+  const ta = $("#tblApps tbody");
+  ta.innerHTML = S.apps.map((a,i)=>`<tr>
+    <td><input type="checkbox" data-a="${i}" data-k="keep" ${a.keep?"checked":""}></td>
+    <td><input type="text" data-a="${i}" data-k="name" value="${esc(a.name)}"></td>
+    <td>${esc(a.kind)}</td><td>${esc(a.firstSeen)}</td>
+    <td class="ev">${esc(a.source)}<br>${esc(a.evidence)}</td></tr>`).join("") || `<tr><td colspan="5" class="sub">尚無資料</td></tr>`;
+  updateStats();
+}
+document.addEventListener("input", e=>{
+  const t=e.target, k=t.dataset.k; if (!k) return;
+  const obj = t.dataset.s!==undefined? S.subs[+t.dataset.s] : t.dataset.a!==undefined? S.apps[+t.dataset.a] : null; if (!obj) return;
+  obj[k] = t.type==="checkbox"? t.checked : t.type==="number"? (t.value===""? "" : +t.value) : t.value;
+  updateStats();
+});
+function updateStats(){
+  const apps = S.apps.filter(a=>a.keep), subs = S.subs.filter(s=>s.keep);
+  $("#sApps").textContent = S.apps.length? apps.length : "–";
+  const live = apps.filter(a=>/目前仍連結/.test(a.kind) || a.source.includes("Google 帳戶頁面")).length;
+  $("#sAppsNote").textContent = S.apps.length? (live? `其中 ${live} 個已由帳戶頁面確認仍連結` : "僅來自通知信：包含之後撤銷的") : "";
+  $("#sSubs").textContent = S.subs.length? subs.length : "–";
+  $("#sSubsNote").textContent = S.subs.length? `共偵測 ${S.subs.length} 筆，未勾選 ${S.subs.length-subs.length} 筆` : "";
+  const tot = {}; let missing=0;
+  for (const s of subs){ const m = CYCLE_MONTHS[s.cycle]; if (!m || s.amount==="" || !s.currency) { missing++; continue; } tot[s.currency]=(tot[s.currency]||0)+ s.amount/m; }
+  const txt = Object.entries(tot).map(([c,v])=>c+" "+Math.round(v).toLocaleString()).join("　");
+  $("#sMonthly").textContent = txt || (subs.length? "金額不足" : "–");
+  if (missing && subs.length) $("#sMonthly").title = missing+" 筆缺金額或週期，未計入";
+}
+function download(name, data, type){
+  const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([data],{type})); a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
+}
+$("#btnJson").onclick = () => {
+  const data = { schema:"subscan/1", exportedAt:new Date().toISOString(),
+    subscriptions: S.subs.filter(s=>s.keep).map(({keep,...r})=>r),
+    connectedApps: S.apps.filter(a=>a.keep).map(({keep,...r})=>r) };
+  download("subscan-"+new Date().toISOString().slice(0,10)+".json", JSON.stringify(data,null,2), "application/json");
+};
+$("#btnCsv").onclick = () => {
+  const q = v => '"'+String(v??"").replace(/"/g,'""')+'"';
+  const rows = [["類別","名稱","金額","幣別","週期","最近扣款/首次出現","狀態","信心","來源","依據"]];
+  S.subs.filter(s=>s.keep).forEach(s=>rows.push(["訂閱",s.name,s.amount,s.currency,s.cycle,s.lastCharge,s.status,s.confidence,s.source,s.evidence]));
+  S.apps.filter(a=>a.keep).forEach(a=>rows.push(["連結App",a.name,"","","",a.firstSeen,a.kind,"",a.source,a.evidence]));
+  download("subscan-"+new Date().toISOString().slice(0,10)+".csv", "﻿"+rows.map(r=>r.map(q).join(",")).join("\r\n"), "text/csv");
+};
+$("#btnClear").onclick = () => { S.subs=[]; S.apps=[]; render(); };
+
+/* ================= 分頁 ================= */
+function switchTab(id){
+  document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on", b.dataset.tab===id));
+  ["tA","tB","tR"].forEach(t=>$("#"+t).classList.toggle("hidden", t!==id));
+}
+document.querySelectorAll(".tabs button").forEach(b=> b.onclick = ()=>switchTab(b.dataset.tab));
+render();
+// 測試掛勾（不影響使用）
+window.__subscan = { extractAmount, parseAppMail, parseConnections, parsePlay, buildSubs, cycleFromGaps, S };
+</script>
+</body>
+</html>
